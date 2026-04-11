@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchItem, fetchQueue, submitAction } from './api'
 import QueueList from './components/QueueList'
 import ItemDetail from './components/ItemDetail'
+import Toast, { type ToastState } from './components/Toast'
 import {
   REVIEWERS,
   TERMINAL_STATUSES,
@@ -19,6 +20,7 @@ export default function App() {
   const [loadTick, setLoadTick] = useState(0)
   const [actionPending, setActionPending] = useState<Action | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [toast, setToast] = useState<ToastState | null>(null)
 
   // Initial load and retry. Auto-selects the first item so the reviewer
   // always lands on something to action rather than an empty panel.
@@ -49,7 +51,6 @@ export default function App() {
   async function handleSelect(id: string) {
     setSelectedId(id)
     setActionError(null)
-    // Prefer the queue copy we already have to keep navigation snappy.
     const fromQueue = queue?.find((it) => it.id === id)
     if (fromQueue) {
       setDetail(fromQueue)
@@ -65,12 +66,11 @@ export default function App() {
 
   async function handleAction(action: Action) {
     if (!detail) return
+    const actedTitle = detail.title
     setActionPending(action)
     setActionError(null)
     try {
       const updated = await submitAction(detail.id, action, reviewer)
-      // Refetch queue and detail to make sure the UI reflects server truth,
-      // not the single response we just got back.
       const [nextQueue, refreshedDetail] = await Promise.all([
         fetchQueue(),
         fetchItem(updated.id)
@@ -78,12 +78,12 @@ export default function App() {
       setQueue(nextQueue)
       setDetail(refreshedDetail)
 
-      // If the action moved the item into a terminal state, it has dropped
-      // out of the active queue. Nudge the reviewer onto the next one so
-      // the panel does not show a dead-end.
+      // Fire the confirmation toast so the reviewer sees what just happened
+      // instead of the item silently vanishing from the queue.
+      setToast({ id: `${refreshedDetail.id}-${Date.now()}`, title: actedTitle, action })
+
       if (TERMINAL_STATUSES.has(refreshedDetail.status) && nextQueue.length > 0) {
-        const nextId = nextQueue[0].id
-        setSelectedId(nextId)
+        setSelectedId(nextQueue[0].id)
         setDetail(nextQueue[0])
       } else if (nextQueue.length === 0) {
         setSelectedId(null)
@@ -94,6 +94,20 @@ export default function App() {
       setActionPending(null)
     }
   }
+
+  const detailNode = detail ? (
+    <ItemDetail
+      item={detail}
+      reviewer={reviewer}
+      pending={actionPending}
+      actionError={actionError}
+      onAction={handleAction}
+    />
+  ) : (
+    <div className="rounded-lg border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+      Select an item from the queue to see details.
+    </div>
+  )
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -151,30 +165,23 @@ export default function App() {
               Loading queue…
             </div>
           ) : (
-            <QueueList items={queue} selectedId={selectedId} onSelect={handleSelect} />
+            <QueueList
+              items={queue}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              inlineDetail={detailNode}
+            />
           )}
         </section>
 
-        <section>
-          {detail ? (
-            <ItemDetail
-              item={detail}
-              reviewer={reviewer}
-              pending={actionPending}
-              actionError={actionError}
-              onAction={handleAction}
-            />
-          ) : (
-            <div className="rounded-lg border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-              Select an item from the queue to see details.
-            </div>
-          )}
-        </section>
+        <section className="hidden md:block">{detailNode}</section>
       </main>
 
       <footer className="mx-auto max-w-6xl px-6 pb-6 pt-2 text-right text-xs text-slate-400">
         Built by Thomas Hughes · London
       </footer>
+
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   )
 }
